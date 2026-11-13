@@ -8,6 +8,7 @@ Everything is done in memory (no files are written to disk).
 
 import io
 import json
+import re
 import time
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
@@ -185,17 +186,35 @@ def _csrf_token(session) -> str:
     return ""
 
 
+def _find_csrf_token(session) -> str:
+    """CSRF token from the session cookie, else from the report page itself."""
+    token = _csrf_token(session)
+    if token:
+        return token
+    try:
+        page = session.get(CLIENT_REPORT_PAGE.split("#")[0], timeout=30)
+    except requests.RequestException:
+        return ""
+    token = _csrf_token(session)
+    if token:
+        return token
+    m = (re.search(r'name=["\']csrfmiddlewaretoken["\'][^>]*value=["\']([^"\']+)', page.text)
+         or re.search(r'name=["\']csrf-token["\'][^>]*content=["\']([^"\']+)', page.text))
+    return m.group(1) if m else ""
+
+
 def fetch_client_lookup(session) -> dict:
     """
     Run the Client Cities report in WellSky (start it, wait for it to finish,
     download the rows) and return {(last, first): {city, tags}}.
     """
     headers = {
-        "Referer": CLIENT_REPORT_PAGE,
+        "Origin": BASE_URL,
+        "Referer": CLIENT_REPORT_PAGE.split("#")[0],
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json",
     }
-    csrf = _csrf_token(session)
+    csrf = _find_csrf_token(session)
     if csrf:
         headers["X-CSRFToken"] = csrf
 
@@ -205,9 +224,12 @@ def fetch_client_lookup(session) -> dict:
             json=CLIENT_REPORT_PAYLOAD, headers=headers, timeout=30,
         )
         if resp.status_code >= 400:
+            snippet = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", resp.text)).strip()[:300]
             raise FillsError(
                 f"WellSky wouldn't start the client report (HTTP {resp.status_code}). "
-                "The WellSky account may not have permission to run reports."
+                f"WellSky said: {snippet or '(no message)'} "
+                f"[security token sent: {'yes' if csrf else 'no'}; "
+                f"cookies in session: {sorted(c.name for c in session.cookies)}]"
             )
         report_id = resp.json()["id"]
 
