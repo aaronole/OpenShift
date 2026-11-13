@@ -6,6 +6,8 @@ Run locally:   streamlit run app.py
 
 import hmac
 import io
+import logging
+import traceback
 import zipfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -13,6 +15,8 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 import fills_core as core
+
+log = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Stonebridge Fills Maker")  # must be the first Streamlit call
 
@@ -101,9 +105,12 @@ if st.button("Generate Fills"):
             st.session_state["results"] = result
         except core.FillsError as e:
             st.error(str(e))
-        except Exception:
+        except Exception as e:
+            log.exception("Generate Fills failed")
             st.error("Something went wrong generating the fills. Please try again, "
                      "and let your manager know if it keeps happening.")
+            with st.expander("Technical details (send these to your manager)"):
+                st.code(f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}")
 
 
 # ==========================================
