@@ -1,0 +1,140 @@
+"""
+Stonebridge Fills Maker - Streamlit app.
+
+Run locally:   streamlit run app.py
+"""
+
+import hmac
+import io
+import zipfile
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import streamlit as st
+
+import fills_core as core
+
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+# ==========================================
+# PAGE
+# ==========================================
+
+st.set_page_config(page_title="Stonebridge Fills Maker")
+st.title("Stonebridge Fills Maker")
+
+
+# ==========================================
+# PASSWORD GATE
+# ==========================================
+
+def check_password():
+    entered = st.session_state.get("password_input", "")
+    if hmac.compare_digest(entered.encode(), APP_PASSWORD.encode()):
+        st.session_state["authed"] = True
+        st.session_state["password_wrong"] = False
+    else:
+        st.session_state["password_wrong"] = True
+    st.session_state["password_input"] = ""
+
+
+if not st.session_state.get("authed"):
+    st.text_input(
+        "Password",
+        type="password",
+        key="password_input",
+        on_change=check_password,
+    )
+    if st.session_state.get("password_wrong"):
+        st.error("Incorrect password.")
+    st.stop()
+
+
+# ==========================================
+# MAIN APP
+# ==========================================
+
+# Needed to know which county each client is in. Uploaded from the
+# Clients report downloaded from WellSky.
+client_file = st.file_uploader(
+    "Client list (Clients.xlsx)",
+    type=["xlsx"],
+    help="Download the Clients report from WellSky and upload it here.",
+)
+
+st.subheader("Fills to make:")
+
+selected = [
+    label
+    for label in core.REGIONS
+    if st.checkbox(label, key=f"region_{label}")
+]
+
+if st.button("Generate Fills"):
+    st.session_state.pop("results", None)
+
+    if not selected:
+        st.warning("Select at least one fills schedule.")
+    elif client_file is None:
+        st.warning("Upload the client list (Clients.xlsx) first.")
+    else:
+        try:
+            with st.spinner("Pulling the schedule from WellSky..."):
+                result = core.make_fills(
+                    client_file, selected, WELLSKY_USERNAME, WELLSKY_PASSWORD
+                )
+            result["pulled_at"] = datetime.now(ZoneInfo("America/Denver"))
+            st.session_state["results"] = result
+        except core.FillsError as e:
+            st.error(str(e))
+        except Exception:
+            st.error("Something went wrong generating the fills. Please try again, "
+                     "and let your manager know if it keeps happening.")
+
+
+# ==========================================
+# RESULTS (kept in session so downloads don't reset the page)
+# ==========================================
+
+results = st.session_state.get("results")
+if results:
+    t = results["pulled_at"]
+    st.success(
+        f"Fills are ready. Pulled from WellSky at {t.hour % 12 or 12}:{t.minute:02d} "
+        f"{t.strftime('%p')} on {t.strftime('%b')} {t.day}."
+    )
+
+    for label, (filename, data) in results["files"].items():
+        count = results["counts"][label]
+        st.download_button(
+            f"Download {label} ({count} open shift{'s' if count != 1 else ''})",
+            data=data,
+            file_name=filename,
+            mime=XLSX_MIME,
+            key=f"dl_{label}",
+        )
+
+    if len(results["files"]) > 1:
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for filename, data in results["files"].values():
+                zf.writestr(filename, data)
+        st.download_button(
+            "Download all (.zip)",
+            data=zip_buf.getvalue(),
+            file_name="Fills.zip",
+            mime="application/zip",
+            key="dl_zip",
+        )
+
+    if results["unmatched"]:
+        with st.expander(
+            f"{len(results['unmatched'])} client(s) with open shifts weren't found in the client list"
+        ):
+            st.write(
+                "These clients' shifts are missing from the fills above. "
+                "Re-download the Clients report from WellSky if the list is out of date."
+            )
+            st.write(", ".join(results["unmatched"]))
