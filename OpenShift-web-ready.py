@@ -104,6 +104,7 @@ if st.button("Generate Fills"):
             result["pulled_at"] = datetime.now(ZoneInfo("America/Denver"))
             st.session_state["results"] = result
         except core.FillsError as e:
+            log.warning("Generate Fills: %s", e)
             st.error(str(e))
         except Exception as e:
             log.exception("Generate Fills failed")
