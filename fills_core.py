@@ -7,6 +7,8 @@ Everything is done in memory (no files are written to disk).
 """
 
 import io
+import json
+import time
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
@@ -87,10 +89,47 @@ def looks_like_schedule(resp) -> bool:
     return "sched_row" in resp.text and "login" not in resp.url.lower()
 
 
-def fetch_weekly_html(username: str, password: str) -> str:
+def _login_form_submit(session, resp, username: str, password: str):
+    """Fill in and submit the login form found in resp; returns nothing."""
+    soup = BeautifulSoup(resp.text, "html.parser")
+    pw_input = soup.find("input", {"type": "password"})
+    form = pw_input.find_parent("form") if pw_input else None
+    if not form:
+        raise FillsError("Couldn't find the WellSky login form.")
+
+    data = {}
+    for inp in form.find_all(["input", "select", "textarea"]):
+        name = inp.get("name")
+        itype = (inp.get("type") or "").lower()
+        if not name or itype in ("submit", "button", "image", "file"):
+            continue
+        if itype in ("checkbox", "radio") and not inp.has_attr("checked"):
+            continue
+        data[name] = inp.get("value", "")
+
+    user_input = None
+    for inp in form.find_all("input"):
+        if inp is pw_input:
+            break
+        if (inp.get("type") or "text").lower() in ("text", "email") and inp.get("name"):
+            user_input = inp
+    if user_input is None:
+        raise FillsError("Couldn't find the username field on the WellSky login form.")
+
+    data[user_input["name"]] = username
+    data[pw_input["name"]] = password
+
+    action = urljoin(resp.url, form.get("action") or resp.url)
+    if (form.get("method") or "post").lower() == "get":
+        session.get(action, params=data, timeout=30)
+    else:
+        session.post(action, data=data, timeout=30)
+
+
+def login_and_fetch_weekly(username: str, password: str):
     """
-    Log into WellSky the way a browser would (load the login page, fill in the
-    form including hidden fields, submit) and return the weekly schedule HTML.
+    Log into WellSky the way a browser would and return
+    (logged-in requests.Session, weekly schedule HTML).
     """
     session = requests.Session()
     session.headers["User-Agent"] = "Mozilla/5.0 (StonebridgeFillsMaker)"
@@ -98,42 +137,8 @@ def fetch_weekly_html(username: str, password: str) -> str:
     try:
         resp = session.get(WEEKLY_URL, timeout=30)
         resp.raise_for_status()
-
         if not looks_like_schedule(resp):
-            soup = BeautifulSoup(resp.text, "html.parser")
-            pw_input = soup.find("input", {"type": "password"})
-            form = pw_input.find_parent("form") if pw_input else None
-            if not form:
-                raise FillsError("Couldn't find the WellSky login form.")
-
-            data = {}
-            for inp in form.find_all(["input", "select", "textarea"]):
-                name = inp.get("name")
-                itype = (inp.get("type") or "").lower()
-                if not name or itype in ("submit", "button", "image", "file"):
-                    continue
-                if itype in ("checkbox", "radio") and not inp.has_attr("checked"):
-                    continue
-                data[name] = inp.get("value", "")
-
-            user_input = None
-            for inp in form.find_all("input"):
-                if inp is pw_input:
-                    break
-                if (inp.get("type") or "text").lower() in ("text", "email") and inp.get("name"):
-                    user_input = inp
-            if user_input is None:
-                raise FillsError("Couldn't find the username field on the WellSky login form.")
-
-            data[user_input["name"]] = username
-            data[pw_input["name"]] = password
-
-            action = urljoin(resp.url, form.get("action") or resp.url)
-            if (form.get("method") or "post").lower() == "get":
-                session.get(action, params=data, timeout=30)
-            else:
-                session.post(action, data=data, timeout=30)
-
+            _login_form_submit(session, resp, username, password)
             resp = session.get(WEEKLY_URL, timeout=30)
             resp.raise_for_status()
     except requests.RequestException as e:
@@ -144,7 +149,110 @@ def fetch_weekly_html(username: str, password: str) -> str:
             "Logged into WellSky, but didn't get the schedule back. "
             "The WellSky login saved in the app may be wrong or expired."
         )
-    return resp.text
+    return session, resp.text
+
+
+# ==========================================
+# CLIENT LIST FROM WELLSKY (the "Client Cities" report)
+# ==========================================
+
+BASE_URL = "https://stonebridgesouth.clearcareonline.com"
+CLIENT_REPORT_PAGE = BASE_URL + "/reports/custom/extreme/#/saved/clients/202119"
+CLIENT_REPORT_TIMEOUT = 120      # seconds to wait for WellSky to finish the report
+CLIENT_REPORT_POLL_SECONDS = 2
+
+# Exactly what WellSky's "Run Report" button sends for the Client Cities report
+CLIENT_REPORT_PAYLOAD = {
+    "id": "clients",
+    "report_name": "Client Cities",
+    "group_by": None,
+    "filters": [{
+        "key": "patient__deactivated",
+        "type": "BooleanField",
+        "operator": "is",
+        "inclusion": "include",
+        "input": "False",
+        "allow_delete": True,
+    }],
+    "fields": ["last_name", "first_name", "city", "patient__profile__tags__id"],
+}
+
+
+def _csrf_token(session) -> str:
+    for cookie in session.cookies:
+        if cookie.name == "csrftoken":
+            return cookie.value
+    return ""
+
+
+def fetch_client_lookup(session) -> dict:
+    """
+    Run the Client Cities report in WellSky (start it, wait for it to finish,
+    download the rows) and return {(last, first): {city, tags}}.
+    """
+    headers = {
+        "Referer": CLIENT_REPORT_PAGE,
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "application/json",
+    }
+    csrf = _csrf_token(session)
+    if csrf:
+        headers["X-CSRFToken"] = csrf
+
+    try:
+        resp = session.post(
+            f"{BASE_URL}/api/reports/generate/clients",
+            json=CLIENT_REPORT_PAYLOAD, headers=headers, timeout=30,
+        )
+        if resp.status_code >= 400:
+            raise FillsError(
+                f"WellSky wouldn't start the client report (HTTP {resp.status_code}). "
+                "The WellSky account may not have permission to run reports."
+            )
+        report_id = resp.json()["id"]
+
+        deadline = time.time() + CLIENT_REPORT_TIMEOUT
+        body = None
+        while True:
+            r = session.get(f"{BASE_URL}/api/reports/data/{report_id}",
+                            headers=headers, timeout=30)
+            if r.status_code == 200:
+                body = r.json()
+                status = body.get("status")
+                if status == 2:
+                    break
+                if status not in (1, None):
+                    raise FillsError(f"WellSky's client report ended with status {status}.")
+            elif r.status_code != 404:
+                raise FillsError(f"WellSky returned HTTP {r.status_code} while fetching the client report.")
+            if time.time() > deadline:
+                raise FillsError("WellSky's client report took too long to finish. Please try again.")
+            time.sleep(CLIENT_REPORT_POLL_SECONDS)
+    except requests.RequestException as e:
+        raise FillsError(f"Couldn't reach WellSky: {e}") from e
+    except (ValueError, KeyError) as e:
+        raise FillsError("WellSky sent back something unexpected for the client report.") from e
+
+    rows = body.get("data")
+    try:
+        if isinstance(rows, str):
+            rows = json.loads(rows)
+        lookup = {}
+        for row in rows:
+            key = (
+                str(row.get("last_name") or "").strip().lower(),
+                str(row.get("first_name") or "").strip().lower(),
+            )
+            lookup[key] = {
+                "city": str(row.get("city") or "").strip(),
+                "tags": str(row.get("patient__profile__tags__id") or "").strip(),
+            }
+    except (ValueError, TypeError, AttributeError) as e:
+        raise FillsError("Couldn't read the client report data from WellSky.") from e
+
+    if not lookup:
+        raise FillsError("WellSky's client report came back empty.")
+    return lookup
 
 
 # ==========================================
@@ -321,16 +429,23 @@ def build_workbook_bytes(region: str, shifts: list[dict], headers: list[str]) ->
 # ONE CALL FOR THE APP
 # ==========================================
 
-def make_fills(client_file, selected: list[str], wellsky_username: str, wellsky_password: str) -> dict:
+def make_fills(selected: list[str], wellsky_username: str, wellsky_password: str,
+               client_file=None) -> dict:
     """
     Returns {
         "files": {region_label: (filename, xlsx_bytes)},
         "counts": {region_label: number_of_open_shifts},
-        "unmatched": [clients on the schedule but not in the client file],
+        "unmatched": [clients on the schedule but not in the client list],
     }
+    The client list comes from WellSky's Client Cities report, unless a
+    Clients.xlsx file is supplied as a manual override.
     """
-    lookup = build_client_lookup(client_file)
-    html = fetch_weekly_html(wellsky_username, wellsky_password)
+    session, html = login_and_fetch_weekly(wellsky_username, wellsky_password)
+    if client_file is not None:
+        lookup = build_client_lookup(client_file)
+    else:
+        lookup = fetch_client_lookup(session)
+
     shifts, unmatched = extract_shifts(html, lookup, selected)
     headers = build_headers(shifts)
 
