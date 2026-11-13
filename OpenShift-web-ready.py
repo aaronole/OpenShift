@@ -14,7 +14,28 @@ import streamlit as st
 
 import fills_core as core
 
+st.set_page_config(page_title="Stonebridge Fills Maker")  # must be the first Streamlit call
 
+# ==========================================
+# SETTINGS - read from Streamlit secrets
+# ==========================================
+# On Streamlit Community Cloud: App settings -> Secrets. Locally: create
+# .streamlit/secrets.toml next to this file. Contents (top level, no [section]):
+#
+#   APP_PASSWORD = "the password for schedulers"
+#   WELLSKY_USERNAME = "dedicated view-only WellSky username"
+#   WELLSKY_PASSWORD = "that account's password"
+
+try:
+    APP_PASSWORD = st.secrets["APP_PASSWORD"]
+    WELLSKY_USERNAME = st.secrets["WELLSKY_USERNAME"]
+    WELLSKY_PASSWORD = st.secrets["WELLSKY_PASSWORD"]
+except (KeyError, FileNotFoundError):
+    st.error(
+        "This app isn't configured yet: APP_PASSWORD, WELLSKY_USERNAME and "
+        "WELLSKY_PASSWORD need to be set in the app's secrets."
+    )
+    st.stop()
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -22,7 +43,6 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # PAGE
 # ==========================================
 
-st.set_page_config(page_title="Stonebridge Fills Maker")
 st.title("Stonebridge Fills Maker")
 
 
