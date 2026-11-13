@@ -76,14 +76,6 @@ if not st.session_state.get("authed"):
 # MAIN APP
 # ==========================================
 
-# Needed to know which county each client is in. Uploaded from the
-# Clients report downloaded from WellSky.
-client_file = st.file_uploader(
-    "Client list (Clients.xlsx)",
-    type=["xlsx"],
-    help="Download the Clients report from WellSky and upload it here.",
-)
-
 st.subheader("Fills to make:")
 
 selected = [
@@ -97,13 +89,13 @@ if st.button("Generate Fills"):
 
     if not selected:
         st.warning("Select at least one fills schedule.")
-    elif client_file is None:
-        st.warning("Upload the client list (Clients.xlsx) first.")
     else:
         try:
-            with st.spinner("Pulling the schedule from WellSky..."):
+            with st.spinner("Pulling the schedule and client list from WellSky "
+                            "(this can take up to a minute)..."):
                 result = core.make_fills(
-                    client_file, selected, WELLSKY_USERNAME, WELLSKY_PASSWORD
+                    selected, WELLSKY_USERNAME, WELLSKY_PASSWORD,
+                    client_file=st.session_state.get("client_override"),
                 )
             result["pulled_at"] = datetime.now(ZoneInfo("America/Denver"))
             st.session_state["results"] = result
@@ -158,3 +150,17 @@ if results:
                 "Re-download the Clients report from WellSky if the list is out of date."
             )
             st.write(", ".join(results["unmatched"]))
+
+
+# ==========================================
+# BACKUP OPTION
+# ==========================================
+
+with st.expander("Use a Clients.xlsx file instead (optional)"):
+    st.file_uploader(
+        "Client list (Clients.xlsx)",
+        type=["xlsx"],
+        key="client_override",
+        help="Normally not needed: the client list is pulled from WellSky automatically. "
+             "If a file is uploaded here, it is used instead.",
+    )
