@@ -179,9 +179,17 @@ CLIENT_REPORT_PAYLOAD = {
 }
 
 
+CSRF_COOKIE_NAMES = ("cc_csrftokenator", "csrftoken")  # WellSky's is the first
+
+
 def _csrf_token(session) -> str:
-    for cookie in session.cookies:
-        if cookie.name == "csrftoken":
+    cookies = list(session.cookies)
+    for name in CSRF_COOKIE_NAMES:
+        for cookie in cookies:
+            if cookie.name == name:
+                return cookie.value
+    for cookie in cookies:          # last resort: anything that looks like a CSRF cookie
+        if "csrf" in cookie.name.lower():
             return cookie.value
     return ""
 
