@@ -72,7 +72,7 @@ def render_title():
         return
     st.markdown(
         f"""
-        <h1 style="display:flex; align-items:center; gap:1rem; padding:2rem 0; font-size:3.1rem;">
+        <h1 style="display:flex; align-items:center; gap:10rem; padding:2rem 0; font-size:3.1rem;">
             <img src="data:image/png;base64,{icon_b64}" alt=""
                  style="height:1.1em; width:auto; position:relative; top:-0.09em;">
             <span>{APP_TITLE}</span>
