@@ -4,12 +4,14 @@ Stonebridge Fills Maker - Streamlit app.
 Run locally:   streamlit run app.py
 """
 
+import base64
 import hmac
 import io
 import logging
 import traceback
 import zipfile
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -18,7 +20,21 @@ import fills_core as core
 
 log = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Stonebridge Fills Maker")  # must be the first Streamlit call
+APP_TITLE = "Stonebridge Fills Maker"
+ICON_PATH = Path(__file__).parent / "OpenShift-icon.png"   # lives next to app.py in the repo
+
+
+def load_icon():
+    """The app icon as a PIL image, or None if the file isn't there."""
+    try:
+        from PIL import Image
+        return Image.open(ICON_PATH)
+    except Exception:
+        return None
+
+
+# must be the first Streamlit call; page_icon is the browser-tab icon
+st.set_page_config(page_title=APP_TITLE, page_icon=load_icon() or "📅")
 
 # ==========================================
 # SETTINGS - read from Streamlit secrets
@@ -47,7 +63,26 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # PAGE
 # ==========================================
 
-st.title("Stonebridge Fills Maker")
+def render_title():
+    """Title with the icon just to its left, about the same height as the text."""
+    try:
+        icon_b64 = base64.b64encode(ICON_PATH.read_bytes()).decode()
+    except OSError:
+        st.title(APP_TITLE)
+        return
+    st.markdown(
+        f"""
+        <h1 style="display:flex; align-items:center; gap:0.5rem; padding:1rem 0;">
+            <img src="data:image/png;base64,{icon_b64}" alt=""
+                 style="height:1.1em; width:auto;">
+            <span>{APP_TITLE}</span>
+        </h1>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+render_title()
 
 
 # ==========================================
@@ -82,6 +117,13 @@ if not st.session_state.get("authed"):
 
 st.subheader("Fills to make:")
 
+week_label = st.selectbox(
+    "Week",
+    options=list(core.WEEK_OPTIONS),
+    index=list(core.WEEK_OPTIONS).index(core.DEFAULT_WEEK),
+    label_visibility="collapsed",
+)
+
 selected = [
     label
     for label in core.REGIONS
@@ -100,6 +142,7 @@ if st.button("Generate Fills"):
                 result = core.make_fills(
                     selected, WELLSKY_USERNAME, WELLSKY_PASSWORD,
                     client_file=st.session_state.get("client_override"),
+                    weeks=core.WEEK_OPTIONS[week_label],
                 )
             result["pulled_at"] = datetime.now(ZoneInfo("America/Denver"))
             st.session_state["results"] = result
