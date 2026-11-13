@@ -24,7 +24,15 @@ from openpyxl.utils import get_column_letter
 # CONFIG
 # ==========================================
 
-WEEKLY_URL = "https://stonebridgesouth.clearcareonline.com/dashboard/live/weekly/?weeks=1"
+WEEKLY_URL = "https://stonebridgesouth.clearcareonline.com/dashboard/live/weekly/"
+
+# Week choices shown in the app -> the ?weeks= value WellSky expects
+WEEK_OPTIONS = {
+    "Current week": 0,
+    "Next week": 1,
+    "Two weeks out": 2,
+}
+DEFAULT_WEEK = "Next week"
 
 # Event classes that count as "needs coverage"
 SHIFT_CLASSES = ("OPEN_SHIFT", "CANCELLED_BY_OFFICE")
@@ -127,20 +135,21 @@ def _login_form_submit(session, resp, username: str, password: str):
         session.post(action, data=data, timeout=30)
 
 
-def login_and_fetch_weekly(username: str, password: str):
+def login_and_fetch_weekly(username: str, password: str, weeks: int = 1):
     """
     Log into WellSky the way a browser would and return
     (logged-in requests.Session, weekly schedule HTML).
+    weeks: 0 = current week, 1 = next week, 2 = two weeks out.
     """
     session = requests.Session()
     session.headers["User-Agent"] = "Mozilla/5.0 (StonebridgeFillsMaker)"
 
     try:
-        resp = session.get(WEEKLY_URL, timeout=30)
+        resp = session.get(WEEKLY_URL, params={"weeks": weeks}, timeout=30)
         resp.raise_for_status()
         if not looks_like_schedule(resp):
             _login_form_submit(session, resp, username, password)
-            resp = session.get(WEEKLY_URL, timeout=30)
+            resp = session.get(WEEKLY_URL, params={"weeks": weeks}, timeout=30)
             resp.raise_for_status()
     except requests.RequestException as e:
         raise FillsError(f"Couldn't reach WellSky: {e}") from e
@@ -460,7 +469,7 @@ def build_workbook_bytes(region: str, shifts: list[dict], headers: list[str]) ->
 # ==========================================
 
 def make_fills(selected: list[str], wellsky_username: str, wellsky_password: str,
-               client_file=None) -> dict:
+               client_file=None, weeks: int = 1) -> dict:
     """
     Returns {
         "files": {region_label: (filename, xlsx_bytes)},
@@ -470,7 +479,7 @@ def make_fills(selected: list[str], wellsky_username: str, wellsky_password: str
     The client list comes from WellSky's Client Cities report, unless a
     Clients.xlsx file is supplied as a manual override.
     """
-    session, html = login_and_fetch_weekly(wellsky_username, wellsky_password)
+    session, html = login_and_fetch_weekly(wellsky_username, wellsky_password, weeks)
     if client_file is not None:
         lookup = build_client_lookup(client_file)
     else:
