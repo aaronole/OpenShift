@@ -77,7 +77,7 @@ st.markdown(
     .sb-logo {height:110px; width:auto; display:block; margin:0 auto 1.4rem;}
     .sb-header h1 {
         font-family:'Source Sans 3', 'Source Sans Pro', sans-serif; font-weight:700;
-        font-size:1.9rem; letter-spacing:0.06em; text-transform:uppercase; color:#1D5066; padding:0; margin:0;
+        font-size:1.9rem; letter-spacing:0.01em; text-transform:uppercase; color:#1D5066; padding:0; margin:0;
     }
 
     /* section heading */
