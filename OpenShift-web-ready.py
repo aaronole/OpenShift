@@ -21,7 +21,9 @@ import fills_core as core
 log = logging.getLogger(__name__)
 
 APP_TITLE = "Stonebridge Fills Maker"
-ICON_PATH = Path(__file__).parent / "OpenShift-icon.png"   # lives next to app.py in the repo
+HERE = Path(__file__).parent
+ICON_PATH = HERE / "favicon.png"             # browser-tab icon (the logo's arch)
+LOGO_PATH = HERE / "stonebridge-logo.png"    # full logo shown on the page
 
 
 def load_icon():
@@ -65,44 +67,52 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 st.markdown(
     """
     <style>
-    #MainMenu, footer {visibility: hidden;}
-    .block-container {max-width: 720px; padding-top: 2.5rem; padding-bottom: 4rem;}
+    @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&display=swap');
 
-    h1 {color:#1F3A5F; font-weight:700; letter-spacing:-0.02em;}
-    h3 {color:#1F3A5F; font-weight:600; letter-spacing:-0.01em;}
+    #MainMenu, footer {visibility: hidden;}
+    .block-container {max-width: 700px; padding-top: 2.5rem; padding-bottom: 4rem;}
+
+    /* header */
+    .sb-header {text-align:center; padding:0 0 1.6rem; margin-bottom:1.8rem; border-bottom:1px solid #D9DEE2;}
+    .sb-logo {height:92px; width:auto; display:block; margin:0 auto 1.4rem;}
+    .sb-header h1 {
+        font-family:'Cormorant Garamond', Georgia, serif; font-weight:600;
+        font-size:2.4rem; letter-spacing:0.04em; color:#1D5066; padding:0; margin:0;
+    }
+
+    /* section heading */
+    h3 {
+        font-size:0.8rem !important; font-weight:600 !important; letter-spacing:0.16em;
+        text-transform:uppercase; color:#6B6B6B !important; padding-bottom:0.4rem !important;
+    }
 
     /* cards */
     div[data-testid="stVerticalBlockBorderWrapper"] {
-        background:#FFFFFF; border:1px solid #E6E0D4 !important;
-        border-radius:14px; box-shadow:0 1px 3px rgba(31,58,95,0.06);
+        background:#FFFFFF; border:1px solid #D9DEE2 !important;
+        border-radius:4px; box-shadow:0 1px 2px rgba(29,80,102,0.05);
     }
 
     /* inputs */
     div[data-baseweb="select"] > div, div[data-baseweb="input"] > div {
-        border-radius:10px; border-color:#DDD6C8; background:#FFFFFF;
+        border-radius:3px; border-color:#C9D0D5; background:#FFFFFF;
     }
 
     /* buttons */
     .stButton > button, .stDownloadButton > button {
-        border-radius:10px; font-weight:600; padding:0.55rem 1.3rem;
-        border:1px solid #D5CDBD; background:#FFFFFF; color:#1F3A5F;
-        transition:all .15s ease;
+        border-radius:3px; font-weight:500; letter-spacing:0.04em; padding:0.55rem 1.5rem;
+        border:1px solid #1D5066; background:#FFFFFF; color:#1D5066; transition:all .15s ease;
     }
     .stButton > button:hover, .stDownloadButton > button:hover {
-        border-color:#1F3A5F; color:#1F3A5F; box-shadow:0 2px 8px rgba(31,58,95,0.12);
+        background:#F1F5F7; border-color:#1D5066; color:#1D5066;
     }
-    .stButton > button[kind="primary"] {
-        background:#1F3A5F; color:#FFFFFF; border:1px solid #1F3A5F;
-    }
-    .stButton > button[kind="primary"]:hover {
-        background:#2B4C7A; color:#FFFFFF; border-color:#2B4C7A;
-    }
+    .stButton > button[kind="primary"] {background:#1D5066; color:#FFFFFF;}
+    .stButton > button[kind="primary"]:hover {background:#163E50; color:#FFFFFF;}
 
     /* expanders and status */
     div[data-testid="stExpander"], div[data-testid="stStatus"] {
-        border:1px solid #E6E0D4; border-radius:12px; background:#FFFFFF;
+        border:1px solid #D9DEE2; border-radius:4px; background:#FFFFFF;
     }
-    div[data-testid="stAlert"] {border-radius:12px;}
+    div[data-testid="stAlert"] {border-radius:4px;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -113,19 +123,18 @@ st.markdown(
 # ==========================================
 
 def render_title():
-    """Title with the icon just to its left, about the same height as the text."""
+    """Logo above a refined, understated title."""
     try:
-        icon_b64 = base64.b64encode(ICON_PATH.read_bytes()).decode()
+        logo_b64 = base64.b64encode(LOGO_PATH.read_bytes()).decode()
+        logo = f'<img class="sb-logo" src="data:image/png;base64,{logo_b64}" alt="Stonebridge Home Care Solutions">'
     except OSError:
-        st.title(APP_TITLE)
-        return
+        logo = ""
     st.markdown(
         f"""
-        <h1 style="padding:1rem 0; font-size:3.1rem;">
-            <img src="data:image/png;base64,{icon_b64}" alt=""
-                 style="height:1.1em; width:auto; position:relative; top:-0.09em; margin-right:0.2em;">
-            <span>{APP_TITLE}</span>
-        </h1>
+        <div class="sb-header">
+            {logo}
+            <h1>{APP_TITLE}</h1>
+        </div>
         """,
         unsafe_allow_html=True,
     )
