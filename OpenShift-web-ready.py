@@ -60,6 +60,55 @@ except (KeyError, FileNotFoundError):
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 # ==========================================
+# STYLE (navy + warm neutrals; base colors come from .streamlit/config.toml)
+# ==========================================
+st.markdown(
+    """
+    <style>
+    #MainMenu, footer {visibility: hidden;}
+    .block-container {max-width: 720px; padding-top: 2.5rem; padding-bottom: 4rem;}
+
+    h1 {color:#1F3A5F; font-weight:700; letter-spacing:-0.02em;}
+    h3 {color:#1F3A5F; font-weight:600; letter-spacing:-0.01em;}
+
+    /* cards */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background:#FFFFFF; border:1px solid #E6E0D4 !important;
+        border-radius:14px; box-shadow:0 1px 3px rgba(31,58,95,0.06);
+    }
+
+    /* inputs */
+    div[data-baseweb="select"] > div, div[data-baseweb="input"] > div {
+        border-radius:10px; border-color:#DDD6C8; background:#FFFFFF;
+    }
+
+    /* buttons */
+    .stButton > button, .stDownloadButton > button {
+        border-radius:10px; font-weight:600; padding:0.55rem 1.3rem;
+        border:1px solid #D5CDBD; background:#FFFFFF; color:#1F3A5F;
+        transition:all .15s ease;
+    }
+    .stButton > button:hover, .stDownloadButton > button:hover {
+        border-color:#1F3A5F; color:#1F3A5F; box-shadow:0 2px 8px rgba(31,58,95,0.12);
+    }
+    .stButton > button[kind="primary"] {
+        background:#1F3A5F; color:#FFFFFF; border:1px solid #1F3A5F;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background:#2B4C7A; color:#FFFFFF; border-color:#2B4C7A;
+    }
+
+    /* expanders and status */
+    div[data-testid="stExpander"], div[data-testid="stStatus"] {
+        border:1px solid #E6E0D4; border-radius:12px; background:#FFFFFF;
+    }
+    div[data-testid="stAlert"] {border-radius:12px;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ==========================================
 # PAGE
 # ==========================================
 
@@ -115,42 +164,50 @@ if not st.session_state.get("authed"):
 # MAIN APP
 # ==========================================
 
-st.subheader("Fills to make:")
+with st.container(border=True):
+    st.subheader("Fills to make:")
 
-week_label = st.selectbox(
-    "Week",
-    options=list(core.WEEK_OPTIONS),
-    index=list(core.WEEK_OPTIONS).index(core.DEFAULT_WEEK),
-    label_visibility="collapsed",
-)
+    week_label = st.selectbox(
+        "Week",
+        options=list(core.WEEK_OPTIONS),
+        index=list(core.WEEK_OPTIONS).index(core.DEFAULT_WEEK),
+        label_visibility="collapsed",
+    )
 
-selected = [
-    label
-    for label in core.REGIONS
-    if st.checkbox(label, key=f"region_{label}")
-]
+    selected = [
+        label
+        for label in core.REGIONS
+        if st.checkbox(label, key=f"region_{label}")
+    ]
 
-if st.button("Generate Fills"):
+    generate = st.button("Generate Fills", type="primary")
+    st.caption("If WellSky is slow, the app keeps retrying on its own for up to "
+               f"{core.TOTAL_PATIENCE_SECONDS // 60} minutes. Keep this tab open while it works.")
+
+if generate:
     st.session_state.pop("results", None)
 
     if not selected:
         st.warning("Select at least one fills schedule.")
     else:
+        status = st.status("Working with WellSky...", expanded=True)
         try:
-            with st.spinner("Pulling the schedule and client list from WellSky "
-                            "(this can take up to a minute)..."):
-                result = core.make_fills(
-                    selected, WELLSKY_USERNAME, WELLSKY_PASSWORD,
-                    client_file=st.session_state.get("client_override"),
-                    weeks=core.WEEK_OPTIONS[week_label],
-                )
+            result = core.make_fills(
+                selected, WELLSKY_USERNAME, WELLSKY_PASSWORD,
+                client_file=st.session_state.get("client_override"),
+                weeks=core.WEEK_OPTIONS[week_label],
+                progress=status.write,
+            )
             result["pulled_at"] = datetime.now(ZoneInfo("America/Denver"))
             st.session_state["results"] = result
+            status.update(label="Done", state="complete", expanded=False)
         except core.FillsError as e:
             log.warning("Generate Fills: %s", e)
+            status.update(label="Couldn't finish", state="error", expanded=False)
             st.error(str(e))
         except Exception as e:
             log.exception("Generate Fills failed")
+            status.update(label="Couldn't finish", state="error", expanded=False)
             st.error("Something went wrong generating the fills. Please try again, "
                      "and let your manager know if it keeps happening.")
             with st.expander("Technical details (send these to your manager)"):
