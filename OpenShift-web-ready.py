@@ -67,17 +67,17 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600&display=swap');
 
     #MainMenu, footer {visibility: hidden;}
     .block-container {max-width: 700px; padding-top: 2.5rem; padding-bottom: 4rem;}
 
     /* header */
     .sb-header {text-align:center; padding:0 0 1.6rem; margin-bottom:1.8rem; border-bottom:1px solid #D9DEE2;}
-    .sb-logo {height:92px; width:auto; display:block; margin:0 auto 1.4rem;}
+    .sb-logo {height:110px; width:auto; display:block; margin:0 auto 1.4rem;}
     .sb-header h1 {
-        font-family:'Cormorant Garamond', Georgia, serif; font-weight:600;
-        font-size:2.4rem; letter-spacing:0.04em; color:#1D5066; padding:0; margin:0;
+        font-family:'Source Serif 4', Georgia, serif; font-weight:600;
+        font-size:2.1rem; letter-spacing:0.01em; color:#1D5066; padding:0; margin:0;
     }
 
     /* section heading */
