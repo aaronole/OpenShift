@@ -34,6 +34,13 @@ WEEK_OPTIONS = {
 }
 DEFAULT_WEEK = "Next week"
 
+# How patient the app is when WellSky is slow or briefly unavailable.
+REQUEST_TIMEOUT = (15, 120)       # (connect, read) seconds allowed for ONE attempt
+TOTAL_PATIENCE_SECONDS = 600      # keep retrying for up to this long (10 minutes), then report a problem
+RETRY_PAUSE_START = 3             # seconds before the first retry...
+RETRY_PAUSE_MAX = 30              # ...doubling each time, up to this many seconds
+RETRY_STATUS_CODES = (429, 500, 502, 503, 504)   # WellSky "busy, try again" responses
+
 # Event classes that count as "needs coverage"
 SHIFT_CLASSES = ("OPEN_SHIFT", "CANCELLED_BY_OFFICE")
 
@@ -63,6 +70,56 @@ REQUIRED_CLIENT_COLUMNS = ["Last Name", "First Name", "City", "Tags"]
 
 class FillsError(Exception):
     """A problem the user can understand and act on."""
+
+
+class Waiter:
+    """
+    Sends requests to WellSky and keeps trying when WellSky is slow or briefly
+    unavailable, until it works or TOTAL_PATIENCE_SECONDS has passed (one shared
+    clock for the whole run). Problems that retrying can't fix (wrong password,
+    a rejected security token, page not found) are handed straight back.
+
+    progress: optional function that receives short status messages for the screen.
+    """
+
+    def __init__(self, progress=None):
+        self.progress = progress
+        self.deadline = time.monotonic() + TOTAL_PATIENCE_SECONDS
+
+    def say(self, message: str):
+        if self.progress:
+            try:
+                self.progress(message)
+            except Exception:
+                pass            # a display problem must never break the run
+
+    def expired(self) -> bool:
+        return time.monotonic() >= self.deadline
+
+    def send(self, session, method: str, url: str, **kwargs):
+        kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                resp = session.request(method, url, **kwargs)
+                if resp.status_code not in RETRY_STATUS_CODES:
+                    return resp
+                problem = f"WellSky is busy (HTTP {resp.status_code})"
+            except requests.Timeout:
+                problem = "WellSky is slow to respond"
+            except (requests.ConnectionError, requests.exceptions.ChunkedEncodingError):
+                problem = "The connection to WellSky dropped"
+
+            pause = min(RETRY_PAUSE_MAX, RETRY_PAUSE_START * 2 ** (attempt - 1))
+            if time.monotonic() + pause >= self.deadline:
+                raise FillsError(
+                    f"{problem}, and it still hasn't worked after "
+                    f"{TOTAL_PATIENCE_SECONDS // 60} minutes of trying. "
+                    "Please try again in a few minutes."
+                )
+            self.say(f"{problem}. Trying again in {pause:g} seconds (attempt {attempt + 1})...")
+            time.sleep(pause)
 
 
 # ==========================================
@@ -98,7 +155,7 @@ def looks_like_schedule(resp) -> bool:
     return "sched_row" in resp.text and "login" not in resp.url.lower()
 
 
-def _login_form_submit(session, resp, username: str, password: str):
+def _login_form_submit(session, resp, username: str, password: str, waiter):
     """Fill in and submit the login form found in resp; returns nothing."""
     soup = BeautifulSoup(resp.text, "html.parser")
     pw_input = soup.find("input", {"type": "password"})
@@ -130,26 +187,29 @@ def _login_form_submit(session, resp, username: str, password: str):
 
     action = urljoin(resp.url, form.get("action") or resp.url)
     if (form.get("method") or "post").lower() == "get":
-        session.get(action, params=data, timeout=30)
+        waiter.send(session, "GET", action, params=data)
     else:
-        session.post(action, data=data, timeout=30)
+        waiter.send(session, "POST", action, data=data)
 
 
-def login_and_fetch_weekly(username: str, password: str, weeks: int = 1):
+def login_and_fetch_weekly(username: str, password: str, weeks: int = 1, waiter=None):
     """
     Log into WellSky the way a browser would and return
     (logged-in requests.Session, weekly schedule HTML).
     weeks: 0 = current week, 1 = next week, 2 = two weeks out.
     """
+    waiter = waiter or Waiter()
     session = requests.Session()
     session.headers["User-Agent"] = "Mozilla/5.0 (StonebridgeFillsMaker)"
 
+    waiter.say("Logging into WellSky...")
     try:
-        resp = session.get(WEEKLY_URL, params={"weeks": weeks}, timeout=30)
+        resp = waiter.send(session, "GET", WEEKLY_URL, params={"weeks": weeks})
         resp.raise_for_status()
         if not looks_like_schedule(resp):
-            _login_form_submit(session, resp, username, password)
-            resp = session.get(WEEKLY_URL, params={"weeks": weeks}, timeout=30)
+            _login_form_submit(session, resp, username, password, waiter)
+            waiter.say("Fetching the schedule...")
+            resp = waiter.send(session, "GET", WEEKLY_URL, params={"weeks": weeks})
             resp.raise_for_status()
     except requests.RequestException as e:
         raise FillsError(f"Couldn't reach WellSky: {e}") from e
@@ -168,7 +228,6 @@ def login_and_fetch_weekly(username: str, password: str, weeks: int = 1):
 
 BASE_URL = "https://stonebridgesouth.clearcareonline.com"
 CLIENT_REPORT_PAGE = BASE_URL + "/reports/custom/extreme/#/saved/clients/202119"
-CLIENT_REPORT_TIMEOUT = 120      # seconds to wait for WellSky to finish the report
 CLIENT_REPORT_POLL_SECONDS = 2
 
 # Exactly what WellSky's "Run Report" button sends for the Client Cities report
@@ -203,13 +262,13 @@ def _csrf_token(session) -> str:
     return ""
 
 
-def _find_csrf_token(session) -> str:
+def _find_csrf_token(session, waiter) -> str:
     """CSRF token from the session cookie, else from the report page itself."""
     token = _csrf_token(session)
     if token:
         return token
     try:
-        page = session.get(CLIENT_REPORT_PAGE.split("#")[0], timeout=30)
+        page = waiter.send(session, "GET", CLIENT_REPORT_PAGE.split("#")[0])
     except requests.RequestException:
         return ""
     token = _csrf_token(session)
@@ -220,25 +279,27 @@ def _find_csrf_token(session) -> str:
     return m.group(1) if m else ""
 
 
-def fetch_client_lookup(session) -> dict:
+def fetch_client_lookup(session, waiter=None) -> dict:
     """
     Run the Client Cities report in WellSky (start it, wait for it to finish,
     download the rows) and return {(last, first): {city, tags}}.
     """
+    waiter = waiter or Waiter()
     headers = {
         "Origin": BASE_URL,
         "Referer": CLIENT_REPORT_PAGE.split("#")[0],
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json",
     }
-    csrf = _find_csrf_token(session)
+    csrf = _find_csrf_token(session, waiter)
     if csrf:
         headers["X-CSRFToken"] = csrf
 
+    waiter.say("Starting the client report in WellSky...")
     try:
-        resp = session.post(
-            f"{BASE_URL}/api/reports/generate/clients",
-            json=CLIENT_REPORT_PAYLOAD, headers=headers, timeout=30,
+        resp = waiter.send(
+            session, "POST", f"{BASE_URL}/api/reports/generate/clients",
+            json=CLIENT_REPORT_PAYLOAD, headers=headers,
         )
         if resp.status_code >= 400:
             snippet = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", resp.text)).strip()[:300]
@@ -250,11 +311,13 @@ def fetch_client_lookup(session) -> dict:
             )
         report_id = resp.json()["id"]
 
-        deadline = time.time() + CLIENT_REPORT_TIMEOUT
+        waiter.say("Waiting for WellSky to finish the client report...")
         body = None
+        polls = 0
         while True:
-            r = session.get(f"{BASE_URL}/api/reports/data/{report_id}",
-                            headers=headers, timeout=30)
+            polls += 1
+            r = waiter.send(session, "GET", f"{BASE_URL}/api/reports/data/{report_id}",
+                            headers=headers)
             if r.status_code == 200:
                 body = r.json()
                 status = body.get("status")
@@ -264,8 +327,13 @@ def fetch_client_lookup(session) -> dict:
                     raise FillsError(f"WellSky's client report ended with status {status}.")
             elif r.status_code != 404:
                 raise FillsError(f"WellSky returned HTTP {r.status_code} while fetching the client report.")
-            if time.time() > deadline:
-                raise FillsError("WellSky's client report took too long to finish. Please try again.")
+            if waiter.expired():
+                raise FillsError(
+                    f"WellSky's client report still wasn't finished after "
+                    f"{TOTAL_PATIENCE_SECONDS // 60} minutes. Please try again in a few minutes."
+                )
+            if polls % 15 == 0:
+                waiter.say("Still waiting for the client report...")
             time.sleep(CLIENT_REPORT_POLL_SECONDS)
     except requests.RequestException as e:
         raise FillsError(f"Couldn't reach WellSky: {e}") from e
@@ -469,7 +537,7 @@ def build_workbook_bytes(region: str, shifts: list[dict], headers: list[str]) ->
 # ==========================================
 
 def make_fills(selected: list[str], wellsky_username: str, wellsky_password: str,
-               client_file=None, weeks: int = 1) -> dict:
+               client_file=None, weeks: int = 1, progress=None) -> dict:
     """
     Returns {
         "files": {region_label: (filename, xlsx_bytes)},
@@ -478,13 +546,19 @@ def make_fills(selected: list[str], wellsky_username: str, wellsky_password: str
     }
     The client list comes from WellSky's Client Cities report, unless a
     Clients.xlsx file is supplied as a manual override.
+
+    If WellSky is slow or briefly unavailable, requests are retried for up to
+    TOTAL_PATIENCE_SECONDS. progress: optional function that receives short
+    status messages while that happens.
     """
-    session, html = login_and_fetch_weekly(wellsky_username, wellsky_password, weeks)
+    waiter = Waiter(progress)
+    session, html = login_and_fetch_weekly(wellsky_username, wellsky_password, weeks, waiter)
     if client_file is not None:
         lookup = build_client_lookup(client_file)
     else:
-        lookup = fetch_client_lookup(session)
+        lookup = fetch_client_lookup(session, waiter)
 
+    waiter.say("Building the spreadsheets...")
     shifts, unmatched = extract_shifts(html, lookup, selected)
     headers = build_headers(shifts)
 
